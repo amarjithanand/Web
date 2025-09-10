@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+  <title>FlipHTML5 PDF Clone with Firestore</title>
+  <!-- PageFlip CSS -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/css/page-flip.min.css">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      font-family: Arial, sans-serif;
+      touch-action: none;
+    }
+    #multimedia {
+      width: 100%;
+      max-width: 1080px;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 10px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+      z-index: 10;
+      text-align: center;
+      overflow: auto;
+    }
+    #multimedia h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      color: #333;
+    }
+    #multimedia-content img, #multimedia-content video {
+      max-width: 150px;
+      border-radius: 5px;
+    }
+    #multimedia-content a {
+      color: #007bff;
+      text-decoration: none;
+      font-weight: bold;
+    }
+    #multimedia-content a:hover {
+      text-decoration: underline;
+    }
+    #book {
+      width: 100vw;
+      height: calc(100vh - 60px - 120px);
+      max-width: 1080px;
+      position: relative;
+      background: #fff;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+      touch-action: pinch-zoom;
+    }
+    .page {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #fff;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      position: relative;
+    }
+    .page canvas {
+      width: 100% !important;
+      height: auto !important;
+      max-height: 100%;
+      transform-origin: center;
+      transition: transform 0.3s ease;
+    }
+    #toolbar {
+      position: fixed;
+      bottom: 0;
+      width: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 10px;
+      text-align: center;
+      z-index: 1000;
+    }
+    #toolbar button {
+      padding: 8px 16px;
+      margin: 0 10px;
+      background: #007bff;
+      border: none;
+      color: white;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    #toolbar button:disabled {
+      background: #555;
+      cursor: not-allowed;
+    }
+    #loading {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 20px;
+      border-radius: 5px;
+      display: none;
+      z-index: 1001;
+    }
+  </style>
+</head>
+<body>
+  <div id="multimedia">
+    <h2>Multimedia</h2>
+    <div id="multimedia-content">Loading multimedia...</div>
+  </div>
+  <div id="loading">Loading PDF...</div>
+  <div id="book"></div>
+  <div id="toolbar">
+    <button onclick="zoomIn()">Zoom In</button>
+    <button onclick="zoomOut()">Zoom Out</button>
+    <button onclick="flipbook.flipPrev()" id="prevBtn">Previous</button>
+    <span id="pageInfo">Page 1 of 1</span>
+    <button onclick="flipbook.flipNext()" id="nextBtn">Next</button>
+  </div>
+
+  <!-- PDF.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.14.305/pdf.min.js"></script>
+  <!-- PageFlip -->
+  <script src="https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/js/page-flip.browser.min.js"></script>
+
+  <!-- Firebase Modular SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+    import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+    // ✅ Firebase Config
+    const firebaseConfig = {
+      apiKey: "AIzaSyDBznllARhkqgps9WzJK2lKsdl9cR7A1Js",
+      authDomain: "flip-clone-19aa3.firebaseapp.com",
+      projectId: "flip-clone-19aa3",
+      storageBucket: "flip-clone-19aa3.appspot.com",
+      messagingSenderId: "247235274877",
+      appId: "1:247235274877:web:bc8e8951bd376e143b6914",
+      measurementId: "G-GP585NZ91Z"
+    };
+
+    // ✅ Initialize Firebase
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    document.addEventListener("DOMContentLoaded", async function () {
+      const book = document.getElementById("book");
+      const loading = document.getElementById("loading");
+      const pageInfo = document.getElementById("pageInfo");
+      const prevBtn = document.getElementById("prevBtn");
+      const nextBtn = document.getElementById("nextBtn");
+      const multimediaContent = document.getElementById("multimedia-content");
+
+      let zoomLevel = 1.5;
+      let zoomCenter = { x: 0, y: 0 };
+      loading.style.display = "block";
+
+      // ✅ Fetch PDF URL from Firestore
+      let pdfUrl;
+      try {
+        const docRef = doc(db, "pdfs", "main");
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists() && docSnap.data().pdfUrl) {
+          pdfUrl = docSnap.data().pdfUrl;
+          console.log("PDF URL:", pdfUrl);
+        } else {
+          loading.textContent = "Error: No PDF URL found!";
+          return;
+        }
+      } catch (error) {
+        loading.textContent = `Error fetching PDF URL: ${error.message}`;
+        return;
+      }
+
+      // ✅ Initialize PageFlip
+      window.flipbook = new St.PageFlip(book, {
+        width: window.innerWidth,
+        height: window.innerHeight - 60 - 120,
+        size: "stretch",
+        maxShadowOpacity: 0.5,
+        showCover: true,
+        flippingTime: 800,
+        usePortrait: true,
+        singlePage: true,
+        drawShadow: true,
+        swipeDistance: 20,
+        mobileScrollSupport: false,
+        autoSize: true,
+        startPage: 0,
+      });
+
+      // ✅ Load PDF and render pages
+      let pdf;
+      try {
+        const loadingTask = pdfjsLib.getDocument(pdfUrl);
+        pdf = await loadingTask.promise;
+      } catch (err) {
+        loading.textContent = `Error loading PDF: ${err.message}`;
+        return;
+      }
+
+      const pagePromises = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        pagePromises.push(
+          pdf.getPage(i).then(page => {
+            const viewport = page.getViewport({ scale: zoomLevel });
+            const canvas = document.createElement("canvas");
+            const context = canvas.getContext("2d");
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+
+            return page.render({ canvasContext: context, viewport }).promise.then(() => {
+              const pageElement = document.createElement("div");
+              pageElement.classList.add("page");
+              pageElement.appendChild(canvas);
+              return pageElement;
+            });
+          })
+        );
+      }
+
+      Promise.all(pagePromises).then(pages => {
+        flipbook.loadFromHTML(pages);
+        loading.style.display = "none";
+        pageInfo.textContent = `Page ${flipbook.getCurrentPageIndex() + 1} of ${pages.length}`;
+        updateButtons();
+        updateMultimedia(flipbook.getCurrentPageIndex());
+      });
+
+      // ✅ Update multimedia from Firestore
+      async function updateMultimedia(pageIndex) {
+        try {
+          const pageDoc = doc(db, "pages", (pageIndex + 1).toString());
+          const pageSnap = await getDoc(pageDoc);
+          if (pageSnap.exists()) {
+            const data = pageSnap.data();
+            switch (data.type) {
+              case "image":
+                multimediaContent.innerHTML = `<img src="${data.url}" alt="">${data.description ? `<p>${data.description}</p>` : ""}`;
+                break;
+              case "video":
+                multimediaContent.innerHTML = `<video width="150" controls><source src="${data.url}" type="video/mp4"></video>${data.description ? `<p>${data.description}</p>` : ""}`;
+                break;
+              case "audio":
+                multimediaContent.innerHTML = `<audio controls><source src="${data.url}" type="audio/mpeg"></audio>${data.description ? `<p>${data.description}</p>` : ""}`;
+                break;
+              case "link":
+                multimediaContent.innerHTML = `<p><a href="${data.url}" target="_blank">${data.description || "Visit Link"}</a></p>`;
+                break;
+              default:
+                multimediaContent.innerHTML = "No multimedia for this page.";
+            }
+          } else {
+            multimediaContent.innerHTML = "No multimedia for this page.";
+          }
+        } catch (error) {
+          multimediaContent.innerHTML = `Error loading multimedia: ${error.message}`;
+        }
+      }
+
+      // ✅ Buttons & Navigation
+      function updateButtons() {
+        const currentPage = flipbook.getCurrentPageIndex();
+        const totalPages = flipbook.getPageCount();
+        pageInfo.textContent = `Page ${currentPage + 1} of ${totalPages}`;
+        prevBtn.disabled = currentPage === 0;
+        nextBtn.disabled = currentPage === totalPages - 1;
+      }
+
+      // ✅ Zoom
+      window.zoomIn = function () {
+        zoomLevel = Math.min(zoomLevel + 0.5, 4);
+        updateZoom();
+      };
+
+      window.zoomOut = function () {
+        zoomLevel = Math.max(zoomLevel - 0.5, 0.5);
+        updateZoom();
+      };
+
+      function updateZoom() {
+        document.querySelectorAll('.page canvas').forEach(canvas => {
+          canvas.style.transform = `scale(${zoomLevel / 1.5})`;
+        });
+      }
+
+      flipbook.on("flip", () => {
+        updateButtons();
+        updateMultimedia(flipbook.getCurrentPageIndex());
+      });
+
+      window.addEventListener("resize", () => {
+        flipbook.update({
+          width: window.innerWidth,
+          height: window.innerHeight - 60 - 120,
+          singlePage: true,
+        });
+        updateZoom();
+      });
+    });
+  </script>
+</body>
+</html>
